@@ -1,73 +1,77 @@
-# ESL 建模 (Electronic System Level Modeling)
+# ESL SystemC Clock Demo
 
-> 电子系统级（ESL）建模、仿真与验证的实践仓库。
+这是一个小型但完整的 ESL 建模示例：
 
-## 简介
+- 用 SystemC 风格时钟驱动模块每拍推进。
+- 用 C++ 类实现内部阈值累加逻辑。
+- 用 XML 提供模型配置。
+- 运行时检测 `vector<int>` 是否只有 0/1，并把适合的向量替换为 dynamic bitset 存储。
+- 提供静态/动态检测脚本，覆盖 vector 越界候选点、Debug 运行时检查、XML 到 C++ 的字段审计。
 
-ESL（Electronic System Level，电子系统级）是一种在高于 RTL（寄存器传输级）的抽象层次上对
-电子系统（SoC / 芯片 / 软硬件系统）进行**建模、仿真和验证**的设计方法学。其核心目标是：
+默认构建使用仓库内的最小 SystemC 风格时钟内核 `include/esl/mini_systemc.hpp`，这样当前机器没有外部 SystemC 库也能直接运行。业务代码仍按 `sc_core::sc_clock`、`sc_module`、posedge process 的方式组织，后续接入 Accellera SystemC 时可以替换时钟内核适配层。
 
-- 在芯片流片之前进行**架构探索**与性能评估；
-- 构建**虚拟原型（Virtual Prototype）**，让软件团队提前开始驱动、固件、应用开发；
-- 支持**软硬件协同设计（HW/SW Co-design）**；
-- 以远高于 RTL 的**仿真速度**完成早期功能验证。
+## 模块逻辑
 
-## 为什么需要 ESL
+示例模块是 `ThresholdAccumulatorCore`：
 
-| 维度 | RTL 仿真 | ESL / TLM 仿真 |
-| --- | --- | --- |
-| 抽象层次 | 信号 / 时钟周期 | 事务 / 函数调用 |
-| 仿真速度 | 慢（KHz 级） | 快（MHz~GHz 级，可快数百倍） |
-| 可用时间点 | 设计中后期 | 设计早期 |
-| 主要用途 | 实现与签核 | 架构探索、虚拟原型、软件早开发 |
+1. XML 给出 `input_sequence`、`mask_bits`、`gain`、`threshold`、`cycles` 和时钟周期。
+2. 每个时钟上升沿读取一个输入样本。
+3. `mask_bits[index] == 1` 时，累加 `sample * gain`。
+4. 累加值达到阈值后输出一次 `fired=true`，并扣除阈值。
 
-## 抽象层次
+## 目录结构
 
-```
-算法级 / 功能级   ←  最抽象
-     │
-事务级 (TLM)
-   ├─ LT  (Loosely Timed,   松散定时)
-   └─ AT  (Approximately Timed, 近似定时)
-     │
-周期精确级 (Cycle Accurate)
-     │
-RTL              ←  最具体
-```
-
-## 涉及的语言与工具
-
-本仓库涉及的实现语言与工具**不限于**以下内容，会随主题扩展持续增补：
-
-- **SystemC** —— 基于 C++ 的系统级建模库（IEEE 1666 标准）
-- **C++** —— 核心建模与仿真语言
-- **TLM-2.0** —— 事务级建模标准（loosely-timed / approximately-timed）
-- 其他可能涉及：SystemVerilog、Python（脚本与验证）、Matlab/Simulink（算法建模）等
-
-## 目录结构（规划）
-
-```
+```text
 .
-├── README.md          # 项目说明（当前文件）
-├── src/               # 模型源码（SystemC / C++ 等）
-├── tlm/               # TLM 事务级模型
-├── tests/             # 测试用例与验证平台
-└── docs/              # 设计文档与笔记
+├── config/esl_config.xml          # XML 配置
+├── docs/detection_strategy.md     # 三个核心问题的检测策略
+├── include/esl/                   # 头文件
+├── src/                           # 模型源码
+└── tools/                         # 构建、运行、检测脚本
 ```
 
-> 目录会随着内容补充逐步建立，当前仓库以 README 为起点。
+## 构建和运行
 
-## 构建与运行
+在 PowerShell 中执行：
 
-待模型代码加入后补充具体的构建说明（如 SystemC 环境配置、CMake/Makefile、仿真命令等）。
+```powershell
+.\tools\run.ps1
+```
 
-## 参考资料
+也可以分开构建：
 
-- IEEE Std 1666™ — SystemC Language Reference Manual
-- Accellera Systems Initiative — TLM-2.0 标准
-- 《SystemC: From the Ground Up》
-- 《Transaction-Level Modeling with SystemC》
+```powershell
+.\tools\build.ps1 -Config Release
+.\build\esl_demo.exe .\config\esl_config.xml
+```
 
----
+当前脚本使用本机 Visual Studio MSVC：
 
-*本仓库聚焦 ESL 建模实践，持续更新中。*
+```text
+D:\Software\Visual Studio\anzhuang\VC\Auxiliary\Build\vcvars64.bat
+```
+
+如果你的 Visual Studio 路径不同，脚本会尝试用 `vswhere` 自动查找。
+
+## 检测入口
+
+静态检测：
+
+```powershell
+.\tools\static_check.ps1
+```
+
+动态检测：
+
+```powershell
+.\tools\dynamic_check.ps1
+.\tools\dynamic_check.ps1 -RunBoundsProbe
+```
+
+XML 到 C++ 一一对应审计：
+
+```powershell
+.\tools\xml_audit.ps1
+```
+
+更详细的判断和替换策略见 [docs/detection_strategy.md](docs/detection_strategy.md)。

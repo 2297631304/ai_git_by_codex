@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<esl_model>
+  <model_name>threshold_accumulator</model_name>
+  <clock_period_ns>10</clock_period_ns>
+  <cycles>12</cycles>
+  <threshold>18</threshold>
+  <gain>2</gain>
+  <enable_trace>true</enable_trace>
+  <input_sequence>3,4,2,7,5,1</input_sequence>
+  <mask_bits>1,0,1,1,0,1</mask_bits>
+</esl_model>
