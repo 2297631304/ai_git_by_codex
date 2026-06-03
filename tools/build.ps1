@@ -41,6 +41,8 @@ $Flags = @(
     "/W4",
     "/WX",
     "/utf-8",
+    "/FS",
+    "/Fd$BuildDir\esl_demo.pdb",
     "/I$Root\include",
     "/Fe$Exe",
     "/Fo$BuildDir\"

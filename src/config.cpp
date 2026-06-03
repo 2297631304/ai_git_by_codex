@@ -1,4 +1,5 @@
 #include "esl/config.hpp"
+#include "esl/config_schema.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -107,16 +108,10 @@ std::string vector_to_csv(const std::vector<int>& values) {
 }
 
 ModelConfig load_config_xml(const std::string& path, std::vector<FieldAudit>& audit) {
-    const std::set<std::string> allowed{
-        "model_name",
-        "clock_period_ns",
-        "cycles",
-        "threshold",
-        "gain",
-        "enable_trace",
-        "input_sequence",
-        "mask_bits",
-    };
+    std::set<std::string> allowed;
+    for (const auto& field : config_schema()) {
+        allowed.insert(field.name);
+    }
 
     std::ifstream input(path);
     if (!input) {
@@ -183,6 +178,9 @@ ModelConfig load_config_xml(const std::string& path, std::vector<FieldAudit>& au
     config.enable_trace = parse_bool(required(fields, "enable_trace"), "enable_trace");
     config.input_sequence = parse_int_vector(required(fields, "input_sequence"), "input_sequence");
     config.mask_bits = parse_int_vector(required(fields, "mask_bits"), "mask_bits");
+    config.hazard_mode = trim(required(fields, "hazard_mode").text);
+    config.hazard_cycle = parse_int(required(fields, "hazard_cycle"), "hazard_cycle", 0, 1000000);
+    config.hazard_read_offset = parse_int(required(fields, "hazard_read_offset"), "hazard_read_offset", 0, 1000000);
 
     if (config.model_name.empty()) {
         throw std::runtime_error("XML field 'model_name' must not be empty");
@@ -193,6 +191,10 @@ ModelConfig load_config_xml(const std::string& path, std::vector<FieldAudit>& au
     if (!std::all_of(config.mask_bits.begin(), config.mask_bits.end(), [](int value) { return value == 0 || value == 1; })) {
         throw std::runtime_error("XML field 'mask_bits' must contain only 0/1 values");
     }
+    const std::set<std::string> hazard_modes{"off", "checked_oob", "unchecked_oob", "hang"};
+    if (hazard_modes.find(config.hazard_mode) == hazard_modes.end()) {
+        throw std::runtime_error("XML field 'hazard_mode' must be one of off, checked_oob, unchecked_oob, hang");
+    }
 
     add_audit(audit, "model_name", required(fields, "model_name"), config.model_name);
     add_audit(audit, "clock_period_ns", required(fields, "clock_period_ns"), std::to_string(config.clock_period_ns));
@@ -202,6 +204,9 @@ ModelConfig load_config_xml(const std::string& path, std::vector<FieldAudit>& au
     add_audit(audit, "enable_trace", required(fields, "enable_trace"), config.enable_trace ? "true" : "false");
     add_audit(audit, "input_sequence", required(fields, "input_sequence"), vector_to_csv(config.input_sequence));
     add_audit(audit, "mask_bits", required(fields, "mask_bits"), vector_to_csv(config.mask_bits));
+    add_audit(audit, "hazard_mode", required(fields, "hazard_mode"), config.hazard_mode);
+    add_audit(audit, "hazard_cycle", required(fields, "hazard_cycle"), std::to_string(config.hazard_cycle));
+    add_audit(audit, "hazard_read_offset", required(fields, "hazard_read_offset"), std::to_string(config.hazard_read_offset));
 
     return config;
 }

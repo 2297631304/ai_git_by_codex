@@ -1,8 +1,111 @@
 # ESL 检测策略
 
-这个仓库的目标不是把检测逻辑埋进业务代码里，而是把可运行示例、构建选项和脚本固定下来，让检查可以重复执行。
+这个仓库演示的是一套“外部 skill + 项目少量审计点”的检测闭环。任意 C++ 程序的所有越界路径无法被静态分析完全证明，动态检测也只能覆盖实际运行到的路径；因此本工程把结果分为：
 
-## 1. `vector<int>` 只有 0/1 时如何判断和替换
+- 已静态证明。
+- 已动态证明。
+- 已超时捕获。
+- 有风险但当前外部证据不足，需要 sanitizer、debug iterator、调试器、覆盖更多用例或内部审计点。
+
+## 1. vector 越界如何检测
+
+### 静态阶段
+
+入口：
+
+```powershell
+.\tools\static_check.ps1
+```
+
+它做三件事：
+
+- MSVC `/analyze`。
+- XML 静态 schema 比对。
+- 扫描 C/C++ 里的下标访问并输出 `STATIC_BOUNDS_CANDIDATE`。
+
+示例风险点：
+
+```cpp
+(void)input_sequence_[hazard_index];
+```
+
+这是故意保留的裸 `operator[]` 越界风险。静态阶段不能知道所有运行时 index，但可以把这种候选点收敛出来。
+
+### 动态阶段
+
+入口：
+
+```powershell
+.\tools\dynamic_check.ps1
+```
+
+它会构建 Debug 版本，然后运行四个 case：
+
+- `safe`：正常 XML，必须成功。
+- `checked_oob`：`checked_at()` 故意越界，必须输出 `BOUNDS_ERROR`。
+- `unchecked_oob`：裸 `operator[]` 越界，Debug runtime 可能报错，也可能弹调试器/卡住；脚本必须用 timeout 捕获。
+- `hang`：故意不结束，脚本必须输出 `TIMEOUT_DETECTED`。
+
+确定性越界输出示例：
+
+```text
+ERROR BOUNDS_ERROR vector=input_sequence/hazard_checked index=101 size=6 at src\filter_core.cpp:36 in ThresholdAccumulatorCore::tick
+```
+
+这个结果包含 vector 名、index、size、文件、行号和函数。
+
+### 覆盖边界
+
+如果某个越界路径没有被测试跑到，动态检测无法证明它不存在。  
+如果裸 `operator[]` 在 Release 下读到了未定义内存但没有崩，运行结束后也可能查不出来。  
+工程上必须组合：
+
+- 静态候选扫描。
+- Debug iterator / sanitizer。
+- timeout watchdog。
+- 覆盖危险 XML 和测试用例。
+- 对关键访问使用 `checked_at()` 或由 skill 临时插桩。
+
+## 2. XML 如何确保和 C++ 一一对应
+
+### 静态对应
+
+C++ 侧 schema 在：
+
+```text
+include/esl/config_schema.hpp
+```
+
+字段清单由 `ESL_CONFIG_FIELD_LIST` 定义。静态检查入口：
+
+```powershell
+.\tools\xml_static_check.ps1
+```
+
+它会把 `config/*.xml` 的 tag 和 C++ schema 比较：
+
+- XML 缺 C++ 字段：报 `XML_SCHEMA_MISMATCH missing_cpp_field=...`
+- XML 多字段：报 `XML_SCHEMA_MISMATCH extra_xml_field=...`
+- XML 重复字段：报 `XML_SCHEMA_MISMATCH duplicate_field=...`
+- 全部匹配：输出 `XML_STATIC_OK`
+
+### 动态赋值证明
+
+动态入口：
+
+```powershell
+.\tools\xml_audit.ps1
+```
+
+程序读取 XML 后会打印：
+
+```text
+CONFIG_AUDIT field=hazard_read_offset line=13 xml="100" cpp="100" status=loaded
+```
+
+这证明 XML 原始文本、C++ 解析值、XML 行号是一致的。skill 会解析 `CONFIG_AUDIT`，确认“字段确实被 C++ 得到”。
+
+## 3. vector<int> 只有 0/1 时如何替换 dynamic_bitset
 
 判断方式在 `BinaryVectorStorage::from_vector`：
 
@@ -12,62 +115,29 @@ std::all_of(values.begin(), values.end(), [](int value) {
 });
 ```
 
-如果全量元素都是 0/1，就把 `vector<int>` 转成动态位图存储：按原长度创建 `DynamicBitset`，逐位 `set(i, values[i] == 1)`。之后访问通过 `value_at()`，调用方不用知道底层是 `vector<int>` 还是 bitset。
-
-本例的 `mask_bits` 来自 XML，运行时会打印：
+如果全量元素都是 0/1，就把 `vector<int>` 转成动态位图存储：按原长度创建 `DynamicBitset`，逐位 `set(i, values[i] == 1)`。运行时输出：
 
 ```text
 VECTOR_AUDIT name=mask_bits size=6 storage=dynamic_bitset bits=101101 ones=4
 ```
 
-工程化替换时不能只看声明，必须扫描全部使用点：如果代码依赖 `int&`、负数、非 0/1 值、连续内存地址或频繁写入，不能直接换。适合替换的是布尔语义、按位查询、计数、mask、enable/disable 表这类数据。
+这证明 `mask_bits` 来自 XML，且确实在运行时被转换成 bitset 存储。
 
-## 2. `vector` 越界如何静态和动态定位
+## 4. Skill 何时运行
 
-静态检测入口：
+skill 是外部检查员，不能被 C++ 直接调用。推荐运行时机：
 
-```powershell
-.\tools\static_check.ps1
-```
+- 改了 XML 后。
+- 改了配置结构后。
+- 改了 vector / index / loop / clocked process 后。
+- 每次提交前。
+- 夜间回归时。
+- 仿真崩溃、卡住或结果异常后。
 
-它会执行 MSVC `/analyze`，并列出 `[]` 下标访问候选点；如果本机安装了 `clang-tidy` 或 `cppcheck`，脚本会自动附加运行。静态工具能发现常量越界、明显循环边界错误、部分空容器路径，但对运行时 XML/外部输入决定的下标无法完整证明。
-
-动态检测入口：
-
-```powershell
-.\tools\dynamic_check.ps1
-.\tools\dynamic_check.ps1 -RunBoundsProbe
-```
-
-Debug 构建启用 `/RTC1`、`/Zi` 和 `_ITERATOR_DEBUG_LEVEL=2`。`-RunBoundsProbe` 会编译一个故意越界的小探针，输出精确文件、行号、函数、vector 名称、index 和 size，例如：
-
-```text
-BOUNDS_ERROR vector=probe_values index=5 size=3 at ...\tools\bounds_probe.cpp:10 in main
-```
-
-对已有代码，不需要用户手动理解业务再插桩：先跑静态脚本收敛候选点，再跑 Debug/ASan/debug-iterator 配置。如果必须拿到业务语义级名称，可以用统一封装或编译期强制包含方式集中处理，而不是在每个调用点手写日志。
-
-## 3. XML 如何确保和 C++ 一一对应
-
-配置读取在 `load_config_xml()` 中按固定字段表执行：
-
-- 未知字段：直接报错。
-- 重复字段：直接报错。
-- 缺失字段：直接报错。
-- 类型错误或越界：直接报错。
-- `input_sequence` 与 `mask_bits` 长度不一致：直接报错。
-- `mask_bits` 非 0/1：直接报错。
-
-运行时会打印每个字段的 XML 原始文本、C++ 解析值和 XML 行号：
-
-```text
-CONFIG_AUDIT field=threshold line=6 xml="18" cpp="18" status=loaded
-```
-
-自动校验入口：
+运行方式：
 
 ```powershell
-.\tools\xml_audit.ps1
+powershell -ExecutionPolicy Bypass -File C:\Users\xuche\.codex\skills\esl-runtime-check\scripts\run_esl_runtime_check.ps1 -Project D:\AI\ai_git_by_codex
 ```
 
-这个脚本会构建并运行程序，检查所有必需字段都出现 `CONFIG_AUDIT`，并检查 `mask_bits` 确实转成了 dynamic bitset。
+它会调用项目脚本，收集 `STATIC_BOUNDS_CANDIDATE`、`BOUNDS_ERROR`、`TIMEOUT_DETECTED`、`XML_STATIC_OK`、`CONFIG_AUDIT` 等证据并生成报告。

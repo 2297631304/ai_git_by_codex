@@ -34,6 +34,9 @@ private:
     int threshold_{0};
     int gain_{0};
     int accumulator_{0};
+    std::string hazard_mode_;
+    int hazard_cycle_{0};
+    int hazard_read_offset_{0};
 };
 
 } // namespace esl

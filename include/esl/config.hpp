@@ -21,6 +21,9 @@ struct ModelConfig {
     bool enable_trace{false};
     std::vector<int> input_sequence;
     std::vector<int> mask_bits;
+    std::string hazard_mode;
+    int hazard_cycle{0};
+    int hazard_read_offset{0};
 };
 
 ModelConfig load_config_xml(const std::string& path, std::vector<FieldAudit>& audit);
